@@ -1,9 +1,8 @@
 
 class LinearFunction(object):
-    def __init__(self, a: float, b: float, x0: float, y0: float):
+    def __init__(self, a: float, b: float):
         self.a = a
         self.b = b
-        self.point = (x0, y0)
 
     def getValue(self, x: float):
         return self.a * x + self.b

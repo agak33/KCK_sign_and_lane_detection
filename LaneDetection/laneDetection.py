@@ -1,81 +1,191 @@
 from Image.image import Image
 from LaneDetection.linearFunction import LinearFunction
 
-from skimage import io, feature, transform, color, filters, draw, morphology, exposure
+from skimage import io, feature, transform, color, filters, draw, morphology, exposure, restoration
 import matplotlib.pyplot as plt
 import numpy as np
-from typing import Union, List
 
 
 class LaneDetection(Image):
     def __init__(self, path: str, as_gray: bool = True):
         super().__init__(path, as_gray)
-        self.laneLines: List = []
         self.path = path
 
-    def isolateLane(self):
-        self.image = np.array(self.image, dtype=np.float64)
+    def isolateLane(self, trapezoid: np.array):
+        """
+        Isolate trapezoid from the image.
+        :return: None
+        """
+        image = np.array(self.image, dtype=np.float64)
         height, width = self.image.shape
-        trapezoid = np.array([
-            (width // 10     , height),
-            (width           , height),
-            (int(width * 0.6), height // 2),
-            (int(width * 0.3), height // 2),
-        ])
 
         mask = np.zeros(shape=(height, width))
         rows, columns = draw.polygon(trapezoid[:, 1], trapezoid[:, 0], (height, width))
         mask[rows, columns] = 1
-        self.image *= mask
+        image *= mask
+        return image
 
-    def laneFilter(self,
-                   minValue: Union[float, tuple] = 0.7,
-                   maxValue: Union[float, tuple] = 1):
+
+    def getMedian(self, points):
+        x, y = [], []
+        for point in points:
+            x.append(point[0])
+            y.append(point[1])
+        try:
+            a, b = np.polyfit(x, y, 1)
+        except TypeError:
+            return None
+
+        line = LinearFunction(a, b)
+        dev = [abs(y[i] - line.getValue(x[i])) for i in range(len(y))]
+        for _ in range(int(len(y) * 0.2)):
+            i = dev.index(max(dev))
+            x.pop(i)
+            y.pop(i)
+            dev.pop(i)
+
+        a, b = np.polyfit(x, y, 1)
+        return LinearFunction(a, b)
+
+    def findLane(self, path: str = None):
+        """
+        Detects lane
+        :return: None
+        """
+        left = []
+        right = []
         h, w = self.image.shape
-        for i in range(h):
-            for j in range(w):
-                if maxValue >= self.image[i, j] >= minValue:
-                    self.image[i, j] = 1
-                else:
-                    self.image[i, j] = 0
 
-    def findLane(self):
-        self.isolateLane()
-        #self.laneFilter()
+        trapezoid = np.array([
+            (0.2 * w, h * 0.9),
+            (0.2 * w, h),
+            (0.8 * w, h),
+            (0.8 * w, h * 0.9),
+            (int(w * 0.7), h * 0.75),
+            (int(w * 0.3), h * 0.75),
+        ])
 
-        self.image = feature.canny(self.image)
-        self.show()
+        trapezoidLeft = np.array([
+            (0, h),
+            (0, 0.9 * h),
+            (w * 0.3, h * 0.75),
+            (w * 0.5, h * 0.75),
+            (w * 0.5, h)
+        ])
 
-        # self.image = morphology.dilation(self.image, morphology.square(3))
-        #
-        # angles = np.linspace(-np.pi, np.pi, 360, endpoint=False)
-        # h, theta, d = transform.hough_line(self.image, theta=angles)
-        #
-        # for _, angle, dist in zip(*transform.hough_line_peaks(h, theta, d)):
-        #     (x0, y0) = dist * np.array([np.cos(angle), np.sin(angle)])
-        #     self.laneLines.append(
-        #         LinearFunction(
-        #             np.tan(angle + np.pi / 2),
-        #             y0 - np.tan(angle + np.pi / 2) * x0,
-        #             x0, y0
-        #         )
-        #     )
-        #
-        # h, w = self.image.shape
-        #
-        # mini = min(self.laneLines, key= lambda x: x.a)
-        # maxi = max(self.laneLines, key= lambda x: x.a)
-        #
-        # plt.plot(
-        #     [0, mini.getArgument(h // 1.4)],
-        #     [mini.getValue(0), h // 1.4],
-        #     color='red', lw=10, alpha=0.5
-        # )
-        # plt.plot(
-        #     [maxi.getArgument(h // 1.4), w],
-        #     [h // 1.4, maxi.getValue(w)],
-        #     color='red', lw=10, alpha=0.5
-        # )
-        #
-        # plt.imshow(self.finalImage)
-        # plt.show()
+        trapezoidRight = np.array([
+            (w * 0.5, h),
+            (w * 0.5, h * 0.75),
+            (w * 0.7, h * 0.75),
+            (w, h * 0.9),
+            (w, h)
+        ])
+
+        self.image = exposure.adjust_sigmoid(self.image)
+        self.image = restoration.denoise_bilateral(self.image,
+                                                   sigma_color=0.5,
+                                                   sigma_spatial=0.1)
+
+        medianValue = np.median(self.image)
+        sigma = 0.01
+        lowerBound = max(0.5, (1.0 - sigma) * medianValue)
+        upperBound = min(1.0, (1.0 + sigma) * medianValue)
+
+        self.image = feature.canny(self.image, sigma=sigma,
+                                   low_threshold=lowerBound,
+                                   high_threshold=upperBound)
+        imgCopy = self.isolateLane(trapezoid)
+        imgCopy = morphology.dilation(imgCopy, morphology.square(3))
+
+        for _ in range(10):
+            points = transform.probabilistic_hough_line(imgCopy,
+                                                        threshold=50,
+                                                        line_length=20,
+                                                        seed=90)
+            for point in points:
+                x1, y1 = point[0]
+                x2, y2 = point[1]
+                try:
+                    a = (y1 - y2) / (x1 - x2)
+                    b = y1 - a * x1
+                    line = LinearFunction(a, b)
+                    if a <= -0.3 and (-0.2 * w <= line.getArgument(h) <= 0.4 * w):  # potential left border
+                        left.append(point[0])
+                        left.append(point[1])
+                    elif a >= 0.3 and (0.6 * w <= line.getArgument(h) <= 1.1 * w):   # potential right border
+                        right.append(point[0])
+                        right.append(point[1])
+                except ZeroDivisionError:
+                    continue
+
+        mini = self.getMedian(left)
+        if mini is None:
+            left = []
+            imgCopy = self.isolateLane(trapezoidLeft)
+            imgCopy = morphology.dilation(imgCopy, morphology.square(3))
+            for _ in range(10):
+                points = transform.probabilistic_hough_line(imgCopy,
+                                                            threshold=50,
+                                                            line_length=20,
+                                                            seed=90)
+                for point in points:
+                    x1, y1 = point[0]
+                    x2, y2 = point[1]
+                    try:
+                        a = (y1 - y2) / (x1 - x2)
+                        b = y1 - a * x1
+                        line = LinearFunction(a, b)
+                        if a <= -0.2 and (-0.2 * w <= line.getArgument(h) <= 0.4 * w):  # potential left border
+                            left.append(point[0])
+                            left.append(point[1])
+                    except ZeroDivisionError:
+                        continue
+            mini = self.getMedian(left)
+
+        maxi = self.getMedian(right)
+        if maxi is None:
+            right = []
+            imgCopy = self.isolateLane(trapezoidRight)
+            imgCopy = morphology.dilation(imgCopy, morphology.square(3))
+            for _ in range(10):
+                points = transform.probabilistic_hough_line(imgCopy,
+                                                            threshold=50,
+                                                            line_length=20,
+                                                            seed=90)
+                for point in points:
+                    x1, y1 = point[0]
+                    x2, y2 = point[1]
+                    try:
+                        a = (y1 - y2) / (x1 - x2)
+                        b = y1 - a * x1
+                        line = LinearFunction(a, b)
+                        if a >= 0.2 and (0.6 * w <= line.getArgument(h) <= 1.1 * w):  # potential right border
+                            right.append(point[0])
+                            right.append(point[1])
+                    except ZeroDivisionError:
+                        continue
+            maxi = self.getMedian(right)
+
+        plt.clf()
+        if mini is not None:
+            plt.plot(
+                [0, mini.getArgument(h * 0.85)],
+                [mini.getValue(0), h * 0.85],
+                color='red', lw=10, alpha=0.5
+            )
+
+        if maxi is not None:
+            plt.plot(
+                [maxi.getArgument(h * 0.85), w],
+                [h * 0.85, maxi.getValue(w)],
+                color='red', lw=10, alpha=0.5
+            )
+
+        plt.imshow(self.finalImage)
+        if path is None:
+            plt.show()
+        else:
+            plt.savefig(path, bbox_inches='tight', dpi=300)
+            #io.imsave(path, self.finalImage)
+            print(f"{path} saved")
+
