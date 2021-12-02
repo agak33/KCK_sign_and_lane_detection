@@ -47,38 +47,37 @@ class LaneDetection(Image):
         a, b = np.polyfit(x, y, 1)
         return LinearFunction(a, b)
 
-    def findLane(self, path: str = None):
+    def findLane(self):
         """
         Detects lane
         :return: None
         """
         left = []
         right = []
-        h, w = self.image.shape
 
         trapezoid = np.array([
-            (0.2 * w, h * 0.9),
-            (0.2 * w, h),
-            (0.8 * w, h),
-            (0.8 * w, h * 0.9),
-            (int(w * 0.7), h * 0.75),
-            (int(w * 0.3), h * 0.75),
+            (0.2 * self.w, self.h * 0.9),
+            (0.2 * self.w, self.h),
+            (0.8 * self.w, self.h),
+            (0.8 * self.w, self.h * 0.9),
+            (int(self.w * 0.7), self.h * 0.75),
+            (int(self.w * 0.3), self.h * 0.75),
         ])
 
         trapezoidLeft = np.array([
-            (0, h),
-            (0, 0.9 * h),
-            (w * 0.3, h * 0.75),
-            (w * 0.5, h * 0.75),
-            (w * 0.5, h)
+            (0, self.h),
+            (0, 0.9 * self.h),
+            (self.w * 0.3, self.h * 0.75),
+            (self.w * 0.5, self.h * 0.75),
+            (self.w * 0.5, self.h)
         ])
 
         trapezoidRight = np.array([
-            (w * 0.5, h),
-            (w * 0.5, h * 0.75),
-            (w * 0.7, h * 0.75),
-            (w, h * 0.9),
-            (w, h)
+            (self.w * 0.5, self.h),
+            (self.w * 0.5, self.h * 0.75),
+            (self.w * 0.7, self.h * 0.75),
+            (self.w, self.h * 0.9),
+            (self.w, self.h)
         ])
 
         self.image = exposure.adjust_sigmoid(self.image)
@@ -87,7 +86,7 @@ class LaneDetection(Image):
                                                    sigma_spatial=0.1)
 
         medianValue = np.median(self.image)
-        sigma = 0.01
+        sigma = 0.001
         lowerBound = max(0.5, (1.0 - sigma) * medianValue)
         upperBound = min(1.0, (1.0 + sigma) * medianValue)
 
@@ -97,11 +96,11 @@ class LaneDetection(Image):
         imgCopy = self.isolateLane(trapezoid)
         imgCopy = morphology.dilation(imgCopy, morphology.square(3))
 
-        for _ in range(10):
+        for i in range(10):
             points = transform.probabilistic_hough_line(imgCopy,
                                                         threshold=50,
                                                         line_length=20,
-                                                        seed=90)
+                                                        seed=i * 100)
             for point in points:
                 x1, y1 = point[0]
                 x2, y2 = point[1]
@@ -109,10 +108,10 @@ class LaneDetection(Image):
                     a = (y1 - y2) / (x1 - x2)
                     b = y1 - a * x1
                     line = LinearFunction(a, b)
-                    if a <= -0.3 and (-0.2 * w <= line.getArgument(h) <= 0.4 * w):  # potential left border
+                    if a <= -0.3 and (-0.2 * self.w <= line.getArgument(self.h) <= 0.4 * self.w):  # potential left border
                         left.append(point[0])
                         left.append(point[1])
-                    elif a >= 0.3 and (0.6 * w <= line.getArgument(h) <= 1.1 * w):   # potential right border
+                    elif a >= 0.3 and (0.6 * self.w <= line.getArgument(self.h) <= 1.1 * self.w):   # potential right border
                         right.append(point[0])
                         right.append(point[1])
                 except ZeroDivisionError:
@@ -135,7 +134,7 @@ class LaneDetection(Image):
                         a = (y1 - y2) / (x1 - x2)
                         b = y1 - a * x1
                         line = LinearFunction(a, b)
-                        if a <= -0.2 and (-0.2 * w <= line.getArgument(h) <= 0.4 * w):  # potential left border
+                        if a <= -0.2 and (-0.2 * self.w <= line.getArgument(self.h) <= 0.4 * self.w):  # potential left border
                             left.append(point[0])
                             left.append(point[1])
                     except ZeroDivisionError:
@@ -159,33 +158,34 @@ class LaneDetection(Image):
                         a = (y1 - y2) / (x1 - x2)
                         b = y1 - a * x1
                         line = LinearFunction(a, b)
-                        if a >= 0.2 and (0.6 * w <= line.getArgument(h) <= 1.1 * w):  # potential right border
+                        if a >= 0.2 and (0.6 * self.w <= line.getArgument(self.h) <= 1.1 * self.w):  # potential right border
                             right.append(point[0])
                             right.append(point[1])
                     except ZeroDivisionError:
                         continue
             maxi = self.getMedian(right)
 
-        plt.clf()
-        if mini is not None:
-            plt.plot(
-                [0, mini.getArgument(h * 0.85)],
-                [mini.getValue(0), h * 0.85],
-                color='red', lw=10, alpha=0.5
-            )
-
-        if maxi is not None:
-            plt.plot(
-                [maxi.getArgument(h * 0.85), w],
-                [h * 0.85, maxi.getValue(w)],
-                color='red', lw=10, alpha=0.5
-            )
-
-        plt.imshow(self.finalImage)
-        if path is None:
-            plt.show()
-        else:
-            plt.savefig(path, bbox_inches='tight', dpi=300)
-            #io.imsave(path, self.finalImage)
-            print(f"{path} saved")
+        return mini, maxi
+        # plt.clf()
+        # if mini is not None:
+        #     plt.plot(
+        #         [0, mini.getArgument(self.h * 0.85)],
+        #         [mini.getValue(0), self.h * 0.85],
+        #         color='red', lw=10, alpha=0.5
+        #     )
+        #
+        # if maxi is not None:
+        #     plt.plot(
+        #         [maxi.getArgument(self.h * 0.85), self.w],
+        #         [self.h * 0.85, maxi.getValue(self.w)],
+        #         color='red', lw=10, alpha=0.5
+        #     )
+        #
+        # plt.imshow(self.finalImage)
+        # if path is None:
+        #     plt.show()
+        # else:
+        #     plt.savefig(path, bbox_inches='tight', dpi=300)
+        #     #io.imsave(path, self.finalImage)
+        #     print(f"{path} saved")
 
